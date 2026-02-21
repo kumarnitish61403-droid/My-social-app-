@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pulse - Instagram Edition</title>
+    <link rel="manifest" href="manifest.json">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-firestore-compat.js"></script>
+</head>
+<body class="bg-gray-50 font-sans">
+
+    <div id="login-screen" class="h-screen flex flex-col items-center justify-center p-6">
+        <h1 class="text-4xl font-bold mb-8 italic">Pulse</h1>
+        <button onclick="login()" class="bg-blue-500 text-white px-8 py-3 rounded-lg font-bold w-full max-w-xs shadow-lg">
+            <i class="fab fa-google mr-2"></i> Log in with Google
+        </button>
+    </div>
+
+    <div id="app-screen" class="hidden pb-20">
+        <nav class="bg-white border-b sticky top-0 z-50 p-3 flex items-center justify-between">
+            <span class="text-2xl font-bold italic">Pulse</span>
+            <div class="relative w-1/2">
+                <input type="text" id="search-input" placeholder="Search users..." 
+                       class="w-full bg-gray-100 border-none rounded-lg py-1 px-3 text-sm focus:ring-1 focus:ring-gray-300">
+                <div id="search-results" class="absolute bg-white w-full mt-1 shadow-xl rounded-lg hidden border"></div>
+            </div>
+            <button onclick="logout()"><i class="fas fa-sign-out-alt text-xl"></i></button>
+        </nav>
+
+        <div id="feed-area" class="max-w-md mx-auto mt-4 p-2">
+            </div>
+
+        <div id="chat-area" class="hidden fixed inset-0 bg-white z-[60] flex flex-col">
+            <div class="p-4 border-b flex items-center gap-4">
+                <button onclick="closeChat()"><i class="fas fa-arrow-left"></i></button>
+                <img id="chat-user-img" src="" class="w-8 h-8 rounded-full">
+                <span id="chat-user-name" class="font-bold"></span>
+            </div>
+            <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4"></div>
+            <div class="p-4 border-t flex gap-2">
+                <input id="chat-input" type="text" placeholder="Message..." class="flex-1 border rounded-full px-4 py-2 outline-none">
+                <button onclick="sendPrivateMessage()" class="text-blue-500 font-bold">Send</button>
+            </div>
+        </div>
+
+        <div class="fixed bottom-0 w-full bg-white border-t flex justify-around p-3 text-2xl">
+            <button onclick="showFeed()"><i class="fas fa-home"></i></button>
+            <button onclick="document.getElementById('search-input').focus()"><i class="fas fa-search"></i></button>
+            <button onclick="openProfile()"><i class="fas fa-user-circle"></i></button>
+        </div>
+    </div>
+
+    <script>
+        // PASTE YOUR FIREBASE CONFIG HERE
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_AUTH_DOMAIN",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_STORAGE_BUCKET",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        let currentUser = null;
+        let activeChatId = null;
+
+        // Login Function
+        function login() {
+            const provider = new firebase.auth.GoogleAuthProvider();
+            auth.signInWithPopup(provider);
+        }
+
+        auth.onAuthStateChanged(user => {
+            if (user) {
+                currentUser = user;
+                document.getElementById('login-screen').classList.add('hidden');
+                document.getElementById('app-screen').classList.remove('hidden');
+                saveUserToDB(user);
+                loadFeed();
+            } else {
+                document.getElementById('login-screen').classList.remove('hidden');
+                document.getElementById('app-screen').classList.add('hidden');
+            }
+        });
+
+        async function saveUserToDB(user) {
+            await db.collection("users").doc(user.uid).set({
+                name: user.displayName,
+                email: user.email,
+                photo: user.photoURL,
+                uid: user.uid,
+                username: user.email.split('@')[0] // Default ID based on email
+            }, { merge: true });
+        }
+
+        // Search Functionality
+        const searchInput = document.getElementById('search-input');
+        const searchResults = document.getElementById('search-results');
+
+        searchInput.oninput = async () => {
+            const val = searchInput.value.toLowerCase();
+            if(val.length < 2) { searchResults.classList.add('hidden'); return; }
+            
+            const users = await db.collection("users").get();
+            let html = '';
+            users.forEach(doc => {
+                const u = doc.data();
+                if(u.name.toLowerCase().includes(val) || u.username.toLowerCase().includes(val)) {
+                    html += `<div onclick="startChat('${u.uid}', '${u.name}', '${u.photo}')" class="p-3 hover:bg-gray-100 cursor-pointer flex items-center gap-3">
+                        <img src="${u.photo}" class="w-8 h-8 rounded-full">
+                        <div><p class="font-bold text-sm">${u.name}</p><p class="text-xs text-gray-500">@${u.username}</p></div>
+                    </div>`;
+                }
+            });
+            searchResults.innerHTML = html;
+            searchResults.classList.remove('hidden');
+        };
+
+        // Private Chat Logic
+        function startChat(otherUid, name, img) {
+            searchResults.classList.add('hidden');
+            document.getElementById('chat-area').classList.remove('hidden');
+            document.getElementById('chat-user-name').innerText = name;
+            document.getElementById('chat-user-img').src = img;
+            
+            // Create a unique chat ID for these two users
+            activeChatId = currentUser.uid < otherUid ? currentUser.uid + "_" + otherUid : otherUid + "_" + currentUser.uid;
+            loadMessages();
+        }
+
+        function loadMessages() {
+            db.collection("chats").doc(activeChatId).collection("messages").orderBy("time")
+                .onSnapshot(snap => {
+                    let html = '';
+                    snap.forEach(doc => {
+                        const m = doc.data();
+                        const isMe = m.sender === currentUser.uid;
+                        html += `<div class="flex ${isMe ? 'justify-end' : 'justify-start'}">
+                            <div class="${isMe ? 'bg-blue-500 text-white' : 'bg-gray-200'} px-4 py-2 rounded-2xl max-w-[80%] text-sm">
+                                ${m.text}
+                            </div>
+                        </div>`;
+                    });
+                    const container = document.getElementById('chat-messages');
+                    container.innerHTML = html;
+                    container.scrollTop = container.scrollHeight;
+                });
+        }
+
+        async function sendPrivateMessage() {
+            const text = document.getElementById('chat-input').value;
+            if(!text) return;
+            document.getElementById('chat-input').value = '';
+            await db.collection("chats").doc(activeChatId).collection("messages").add({
+                text: text,
+                sender: currentUser.uid,
+                time: firebase.firestore.FieldValue.serverTimestamp()
+            });
+        }
+
+        function closeChat() { document.getElementById('chat-area').classList.add('hidden'); }
+        function logout() { auth.signOut(); }
+    </script>
+</body>
+</html>
